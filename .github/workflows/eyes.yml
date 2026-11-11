@@ -1,0 +1,86 @@
+# عيون المكتب (eyes-2.0): watches the market in the session and rings the owner's phone (ntfy) on measured setups.
+# Secrets (Settings > Secrets and variables > Actions): FINNHUB_API_KEY, MASSIVE_API_KEY, NTFY_TOPIC, and WATCHLIST (optional).
+# PUBLIC repository (free minutes): a chain of jobs stays awake Monday to Friday, checks every 5 minutes in the session, does the
+# nightly work after the close, and each job starts the next one itself. The schedule below only starts the chain when none is awake.
+# PRIVATE repository (2000 minutes a month): single checks whenever GitHub's schedule fires (it often does not).
+name: eyes
+
+on:
+  schedule:
+    - cron: "3-53/10 9-20 * * 1-5"    # start and watchdog: the script checks New York time; a second job stops at once when one is awake
+    - cron: "17 23 * * 1-5"           # nightly: after the close
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "session, intraday, nightly, test, selftest"
+        required: true
+        default: "test"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  eyes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: pick the mode
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRIVATE=$(gh api "repos/${{ github.repository }}" --jq .private || echo true)
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/eyes.yml/enable" >/dev/null 2>&1 || true   # keeps the schedule alive (GitHub stops it after 60 quiet days)
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            if [ "$PRIVATE" != "true" ]; then MODE=session   # public: the chain does the session and the nightly work itself
+            elif [ "${{ github.event.schedule }}" = "17 23 * * 1-5" ]; then MODE=nightly
+            else MODE=intraday; fi
+          fi
+          SKIP=false
+          if [ "$MODE" = "session" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            N=$(gh api "repos/${{ github.repository }}/actions/workflows/eyes.yml/runs?status=in_progress&per_page=20" --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }})] | length" || echo 0)
+            if [ "$N" != "0" ]; then echo "another job is awake: nothing to do"; SKIP=true; fi
+          fi
+          if [ "$MODE" = "session" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then sleep 45; fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "skip=$SKIP" >> "$GITHUB_OUTPUT"; echo "private=$PRIVATE" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.pick.outputs.skip != 'true'
+        with:
+          sparse-checkout: eyes
+      - name: restore memory
+        if: steps.pick.outputs.skip != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: eyes/state
+          key: eyes-state-${{ github.run_id }}
+          restore-keys: eyes-state-
+      - name: run
+        if: steps.pick.outputs.skip != 'true'
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          WATCHLIST: ${{ secrets.WATCHLIST }}
+          GH_TOKEN: ${{ github.token }}
+          EYES_PUBLIC: ${{ steps.pick.outputs.private != 'true' && '1' || '' }}
+        run: |
+          mkdir -p eyes/state
+          python3 eyes/eyes.py "${{ steps.pick.outputs.mode }}"
+      - name: save memory
+        if: always() && steps.pick.outputs.skip != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: eyes/state
+          key: eyes-state-${{ github.run_id }}
+      - name: keep the day file for the desk
+        if: steps.pick.outputs.mode == 'nightly' && steps.pick.outputs.private == 'true'   # a public repository never stores the day file
+        run: |
+          if [ -d eyes/out ]; then
+            git config user.name "eyes-bot"
+            git config user.email "eyes-bot@users.noreply.github.com"
+            git add eyes/out
+            git diff --cached --quiet || git commit -m "eyes: day file $(date -u +%F)"
+            git push || echo "push skipped"
+          fi
