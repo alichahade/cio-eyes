@@ -1,0 +1,146 @@
+{
+ "panic_rebound": {
+  "grades": [
+   {
+    "id": "A",
+    "ar": "قوي",
+    "rule_en": "WAVE by beta, down >= 10%, VIX >= 30",
+    "n": 1011,
+    "days": 55,
+    "win": 0.746,
+    "avg": 4.62,
+    "median": 5.38,
+    "p10": -7.17,
+    "open_entry_avg": 2.58,
+    "open_entry_win": 0.652
+   },
+   {
+    "id": "B",
+    "ar": "متوسط",
+    "rule_en": "WAVE by beta or by chips sector, down >= 10%, any VIX",
+    "n": 1419,
+    "days": 72,
+    "win": 0.691,
+    "avg": 3.54,
+    "median": 3.86,
+    "p10": -7.42,
+    "open_entry_avg": 1.93,
+    "open_entry_win": 0.606
+   },
+   {
+    "id": "C",
+    "ar": "ضعيف",
+    "rule_en": "chips day, WAVE by sector only, down >= 10%",
+    "n": 614,
+    "days": 31,
+    "win": 0.616,
+    "avg": 1.85,
+    "median": 1.93,
+    "p10": -7.81,
+    "open_entry_avg": 0.6,
+    "open_entry_win": 0.534
+   }
+  ],
+  "depth": {
+   "down_15_plus_wave": {
+    "n": 333,
+    "win": 0.84,
+    "avg": 7.64
+   },
+   "down_10_15_wave": {
+    "n": 698,
+    "win": 0.69,
+    "avg": 3.05
+   },
+   "down_6_10_wave": {
+    "n": 2328,
+    "win": 0.52,
+    "avg": 0.36
+   }
+  },
+  "warnings": {
+   "hold_2_days": {
+    "basket_win": 0.516,
+    "basket_avg": 1.15
+   },
+   "own_news_in_uptrend": {
+    "n": 918,
+    "win": 0.47,
+    "avg": -0.39
+   },
+   "vix_below_30": {
+    "stock_days": 7,
+    "stock_n": 20,
+    "win": 0.55,
+    "avg": 0.25,
+    "note_en": "small sample: weak, say so"
+   },
+   "worst_day": "2020-03-11 basket -12.7% next day; 2025-04-03 basket -7.3%"
+  }
+ },
+ "quiet_drop_bounce": {
+  "tiers": [
+   {
+    "id": "A",
+    "min_drop": 15,
+    "ar": "قوي",
+    "n": 633,
+    "days": 313,
+    "win": 0.63,
+    "avg": 3.25,
+    "excess": 2.15,
+    "p10": -8.64
+   },
+   {
+    "id": "B",
+    "min_drop": 12,
+    "ar": "متوسط لقوي",
+    "n": 1482,
+    "days": 713,
+    "win": 0.58,
+    "avg": 1.53,
+    "excess": 0.7,
+    "p10": -8.18
+   },
+   {
+    "id": "C",
+    "min_drop": 7,
+    "ar": "ضعيف",
+    "n": 12898,
+    "days": 2378,
+    "win": 0.58,
+    "avg": 0.93,
+    "excess": 0.37,
+    "p10": -5.86,
+    "needs_ar": "السوق فوق متوسط 200"
+   }
+  ]
+ },
+ "fear_spike_index": {
+  "n": 29,
+  "win": 0.69,
+  "avg": 4.56,
+  "by_level": {
+   "vix30": {
+    "n": 29,
+    "qqq_60d": 4.56,
+    "win": 0.69,
+    "spy_60d": 3.65,
+    "worst_60d": -28.6
+   },
+   "vix40": {
+    "n": 12,
+    "qqq_60d": 11.76,
+    "win": 0.92,
+    "spy_60d": 7.28,
+    "worst_60d": -23.1
+   }
+  },
+  "baseline_60d": {
+   "qqq": 2.59,
+   "spy": 2.24
+  },
+  "verdict": "edge",
+  "say_ar": "لما الخوف سكّر فوق 30 لأول مرة (29 مرة من 2000): QQQ بعد 60 جلسة +4.6% (69 من 100). فوق 40 (12 مرة): +11.8% (11 من 12). أسوأ مرة -29%."
+ }
+}
