@@ -32,7 +32,7 @@ try:
 except Exception:  # pragma: no cover
     NY = None
 
-VERSION = "eyes-2.0"
+VERSION = "eyes-2.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_DIR = os.environ.get("EYES_STATE", os.path.join(HERE, "state"))
 OUT_DIR = os.path.join(HERE, "out")
@@ -57,6 +57,17 @@ OWN_NEWS_RX = re.compile(r"(?i)\b(earnings|results|quarter|guidance|outlook|fore
                          r"delist|restat|miss(es|ed)?|beat|warn)")
 
 PACE = 1.05   # Finnhub free plan: 60 calls a minute
+
+# eyes-2.1 (owner note 67, 12 Nov 2026: «عاجل بتوصلني بوقتها، مش بعد ساعتين»; NVDA's chief executive resigned at 8:48 AM New York
+# time and the owner heard from the desk 1.5 hours later, after the stock had touched 148). The owner's HOLDINGS (secret HOLDINGS,
+# else holdings.txt) are watched every 5 minutes from 7:00 AM to 8:00 PM New York time: a critical headline rings at once (loud),
+# and in the session every new step of the day's move rings (5, 8, 12, 15, 20%).
+CRIT_RX = re.compile(r"(?i)\b(ceo|chief executive|resign|steps? down|stepping down|ousted|oust|fired|terminat|succession|interim|"
+                     r"investigat|probe|fbi|doj|subpoena|sec charges|indict|fraud|guidance cut|cuts? (its )?(guidance|outlook|forecast)|"
+                     r"lowers? (guidance|outlook|forecast)|withdraws? guidance|offering|dilut|convertible|bankrupt|chapter 11|delist|halt|"
+                     r"recall|downgrade|short seller|short report|restat|export (ban|curb|restriction)|sanction)")
+MOVE_STEPS = (5.0, 8.0, 12.0, 15.0, 20.0)
+EXT_FROM, EXT_TO = (7, 0), (20, 0)   # New York time: holdings news outside the session too
 
 
 # ----------------------------------------------------------------------------------------------------------------- utils
@@ -313,6 +324,109 @@ def stats_line(win, avg, p10=None):
 
 
 # ----------------------------------------------------------------------------------------------------------------- intraday
+def plan_line(q, heads, held, spy_pct=None, soxx_pct=None):
+    """owner note 68 (12 Nov 2026: «ما عطاني دخول وخروج»): every move alert ends with an entry line and an exit line. A plan with
+    numbers is given only where a measured edge exists (a big fall with the market wave); elsewhere the honest line is «no entry»
+    with the exit rule. Numbers: S&P 500 members 2000-2026 (desk lab: panic_rebound, situation_rates)."""
+    pct, last = q["pct"], q["last"]
+    own = bool(own_news(heads)) or any(CRIT_RX.search(h.get("h", "")) for h in heads)
+    if pct < 0:
+        wave = (not own) and spy_pct is not None and is_wave(pct, q["sym"], spy_pct, soxx_pct if soxx_pct is not None else 0)[0]
+        low = q.get("low")
+        if own:
+            # owner note 69, lab/own_drop_stop.py (3,571 own-news falls of 10%+ on S&P 500 members, 2000-2026): a stop under the day's
+            # low is hit 69 times in 100 within 20 sessions and turns the average from +0.5% to -0.2% (60 sessions: +2.7% to -0.4%);
+            # it halves the worst 1 in 10 (-18% to -8%). The size cap protects as well without the cost, so the rule is the size.
+            return ("دخول: لا. الوقعة على خبر الشركة نفسها، وبالتاريخ بيطلع تاني يوم 47 مرة من 100 بس (معدّل ‎-0.4%‎).\n"
+                    "خروج: " + ("إذا السهم فوق حدّه بمحفظتك، خفّف للحد اليوم، وخلّي الباقي بلا وقف قريب: الوقف تحت أوطى اليوم بينضرب 69 مرة من 100 خلال شهر، وبيقلب المعدّل لخسارة." if held else "ما في صفقة."))
+        if wave and pct <= PANIC_DROP:
+            g = panic_grade(None)
+            if held:
+                return ("دخول: لا تزيد، عندك منه (التعزيز على النازل ممنوع).\n"
+                        "خروج: خلّي. الوقعة مع موجة السوق بلا خبر خاص، وبالتاريخ بيطلع تاني يوم %d مرة من 100 (معدّل +%.1f%%)." % (round(g["win"] * 100), g["avg"]))
+            return ("دخول: قرب السكرة (3:50 العصر بنيويورك) حوالي %.2f، حجم صغير.\n"
+                    "خروج: سكرة بكرا مهما صار. بالتاريخ طلع %d مرة من 100، معدّل +%.1f%%. ما في وقف قريب لأنو بينضرب أغلب الأوقات، والحماية من الحجم." % (last, round(g["win"] * 100), g["avg"]))
+        return ("دخول: لا. نزلة مع السوق بلا أفضلية مقاسة.\n"
+                "خروج: " + ("خلّي، إلا إذا السهم فوق حدّه بمحفظتك." if held else "ما في صفقة."))
+    return ("دخول: لا تلحق. الطلعة الكبيرة بيوم ما إلها أفضلية بعدها (بيسبق السوق 53 مرة من 100 على 40 جلسة).\n"
+            "خروج: " + ("إذا صار فوق حدّه بمحفظتك، خفّف للحد وخود ربح الزيادة؛ غير هيك خلّي." if held else "ما في صفقة."))
+
+
+def holdings_list():
+    return [x.strip().upper() for x in re.split(r"[,\s]+", os.environ.get("HOLDINGS", "")) if x.strip()] or lines("holdings.txt")
+
+
+def holdings_watch(fh, st, n, once, in_session=True, quotes=None):
+    """the owner's holdings: a new critical headline rings at once (priority 5); in the session each new step of the day's move rings."""
+    hold = [t for t in holdings_list() if re.fullmatch(r"[A-Z][A-Z.\-]{0,5}", t)][:25]
+    seen = st.setdefault("seen_heads", [])
+    quotes = quotes if quotes is not None else {}
+    mk = {}
+    if in_session and hold:
+        for s_ in ("SPY", "SOXX"):
+            qq = fh.quote(s_)
+            mk[s_] = qq["pct"] if qq else None
+    newsc, stepped = {}, set()
+    for t in hold:
+        q = quotes.get(t) or (fh.quote(t) if in_session else None)
+        if q:
+            quotes[t] = q
+            step = max([x for x in MOVE_STEPS if abs(q["pct"]) >= x] or [0])
+            if step:
+                newsc[t] = fh.news(t, 1)
+                if ("hstep:%s:%s:%d" % (t, "d" if q["pct"] < 0 else "u", step)) not in st.get("sent", {}):
+                    stepped.add(t)
+                word = "نازل" if q["pct"] < 0 else "طالع"
+                low = q.get("low") if q["pct"] < 0 else q.get("high")
+                once("hstep:%s:%s:%d" % (t, "d" if q["pct"] < 0 else "u", step),
+                     "%s %s %+.1f%% (%s)" % (t, word, q["pct"], t12(n)),
+                     "سهم بمحفظتك.\nالسعر %.2f%s.\nعدّى %d%% اليوم.%s\n%s" % (q["last"], (" · أوطى اليوم %.2f" % low) if (low and q["pct"] < 0) else ((" · أعلى اليوم %.2f" % low) if low else ""), int(step),
+                      ("\nليش: " + newsc[t][0]["h"]) if newsc.get(t) else "", plan_line(q, newsc.get(t) or [], True, mk.get("SPY"), mk.get("SOXX"))),
+                     priority=5 if step >= 8 else 4, tags=["rotating_light" if q["pct"] < 0 else "chart_with_upwards_trend"])
+        heads = newsc.get(t) if t in newsc else fh.news(t, 1)
+        for h in heads[:6]:
+            k = "%s|%s" % (t, re.sub(r"\W+", " ", h.get("h", "").lower()).strip()[:90])
+            if k in seen:
+                continue
+            seen.append(k)
+            if t in stepped and newsc.get(t) and h is newsc[t][0]:
+                continue   # the step alert of this check already carries this headline: one ring, not two
+            if CRIT_RX.search(h.get("h", "")) and (time.time() - (h.get("at") or 0)) < 6 * 3600:
+                px = ("\nالسعر %.2f (%+.1f%%)" % (q["last"], q["pct"])) if q else ""
+                pl = plan_line(q, [h], True, mk.get("SPY"), mk.get("SOXX")) if q else ("دخول: لا قبل ما يفتح السوق ويبيّن ردّ الفعل.\n"
+                     "خروج: إذا السهم فوق حدّه بمحفظتك، خفّف للحد أول الجلسة.")
+                once("hnews:" + k, "عاجل: خبر على %s (%s)" % (t, t12(n)),
+                     "سهم بمحفظتك." + px + "\nالخبر:\n" + h.get("h", "") + ("\n" + h.get("src", "") if h.get("src") else "") + "\n" + pl,
+                     priority=5, tags=["rotating_light"])
+    del seen[:-600]
+    return quotes
+
+
+def extended(dry=False):
+    """outside the session (7:00 AM to 9:33 AM and 4:05 PM to 8:00 PM New York time): the holdings' critical news only."""
+    key = secret("FINNHUB_API_KEY")
+    if not key:
+        return 1
+    fh, n = Finnhub(key), now_ny()
+    stp = os.path.join(STATE_DIR, "state.json")
+    st = load(stp, {})
+    today = n.date().isoformat()
+    if st.get("day") != today:
+        prev = {"day": st.get("day"), "panic_ideas": st.get("panic_ideas") or []}
+        st = {"day": today, "sent": {}, "prev": prev if prev["panic_ideas"] else st.get("prev"), "log": [], "seen_heads": st.get("seen_heads", [])}
+
+    def once(k, *a, **kw):
+        if k in st["sent"]:
+            return False
+        ok = ring(*a, dry=dry, **kw)
+        st["sent"][k] = n.isoformat()
+        st["log"].append({"k": k, "at": n.isoformat(), "title": a[0], "msg": a[1], "p": kw.get("priority", 3)})
+        return ok
+    holdings_watch(fh, st, n, once, in_session=False)
+    save(stp, st)
+    return 0
+
+
 def intraday(dry=False):
     key = secret("FINNHUB_API_KEY")
     if not key:
@@ -331,7 +445,7 @@ def intraday(dry=False):
     st = load(stp, {})
     if st.get("day") != today:
         prev = {"day": st.get("day"), "panic_ideas": st.get("panic_ideas") or []}
-        st = {"day": today, "sent": {}, "prev": prev if prev["panic_ideas"] else st.get("prev"), "log": []}
+        st = {"day": today, "sent": {}, "prev": prev if prev["panic_ideas"] else st.get("prev"), "log": [], "seen_heads": st.get("seen_heads", [])}
 
     def once(k, *a, **kw):
         if k in st["sent"]:
@@ -340,6 +454,14 @@ def intraday(dry=False):
         st["sent"][k] = n.isoformat()
         st["log"].append({"k": k, "at": n.isoformat(), "title": a[0], "msg": a[1], "p": kw.get("priority", 3)})
         return ok
+
+    # 0) eyes-2.1: the owner's holdings first (critical news at once, each new step of the move)
+    hq = {}
+    try:
+        hq = holdings_watch(fh, st, n, once, in_session=True)
+    except Exception as e:
+        print("holdings check failed:", clean_err(e))
+    save(stp, st)
 
     # 1) the market
     idx = {s: fh.quote(s) for s in ("SPY", "QQQ", "SOXX")}
@@ -382,7 +504,7 @@ def intraday(dry=False):
 
     # 2) the watch list: big movers and why
     wl = [x.strip().upper() for x in re.split(r"[,\s]+", os.environ.get("WATCHLIST", "")) if x.strip()] or lines("watch.txt")
-    watch = [t for t in wl if t not in idx][:30]
+    watch = [t for t in wl if t not in idx and t not in hq][:30]
     quotes = {}
     for t in watch:
         q = fh.quote(t)
@@ -395,7 +517,8 @@ def intraday(dry=False):
             if q["pct"] <= -20 and not shock:
                 why += "\nوقعة كبيرة على خبر خاص: ما بتنلحق كصفقة سريعة. يلي بيحسمها نوع الشركة وسبب الوقعة: اطلب دراسة من المستشار."
             word = "نازل" if q["pct"] < 0 else "طالع"
-            once("mover:" + t, "%s %s %+.1f%% (%s)" % (t, word, q["pct"], t12(n)), "السعر %.2f.\nليش:\n%s" % (q["last"], why),
+            once("mover:" + t, "%s %s %+.1f%% (%s)" % (t, word, q["pct"], t12(n)), "السعر %.2f.\nليش:\n%s\n%s" % (q["last"], why,
+                 plan_line(q, heads, False, (idx.get("SPY") or {}).get("pct"), (idx.get("SOXX") or {}).get("pct"))),
                  priority=3, tags=["mag"])
 
     # 3) shock day: sweep the S&P 500 for panic-rebound candidates, once, from 2:30 PM
@@ -614,6 +737,12 @@ def session(dry=False, every=300, max_minutes=330, sleep=time.sleep):
                 print("check failed:", clean_err(e))
             passes += 1
             wait = every
+        elif (EXT_FROM <= hm < (9, 33) or (16, 5) < hm <= EXT_TO) and not (hm >= (18, 15) and load(cp, {}).get("nightly_day") != n.date().isoformat()):
+            try:
+                extended(dry)
+            except Exception as e:
+                print("extended check failed:", clean_err(e))
+            wait = every
         elif hm >= (18, 15) and load(cp, {}).get("nightly_day") != n.date().isoformat():
             save(cp, {"nightly_day": n.date().isoformat()})
             try:
@@ -672,24 +801,63 @@ def selftest():
     check("12h time", t12(dt.datetime(2026, 11, 5, 14, 45)) == "2:45 بعد الضهر" and t12(dt.datetime(2026, 11, 5, 9, 5)) == "9:05 الصبح")
     check("token hidden", "SECRET123" not in clean_err("http://x?token=SECRET123&a=1"))
     # the chain: 3 checks before the close (one fails and the day goes on), the nightly work once, then the hand-over
-    global intraday, now_ny, nightly, STATE_DIR
+    check("critical headline", bool(CRIT_RX.search("Nvidia CEO Jensen Huang resigns, CFO named interim chief")) and bool(CRIT_RX.search("Acme cuts guidance")) and not CRIT_RX.search("Nvidia stock rises with chip rally"))
+    # holdings watch with a fake data source: -13% rings the 12% step once, a critical headline rings once
+    class FakeFH:
+        calls = 0
+        def quote(self, t):
+            return {"sym": t, "last": 151.0, "prev": 173.7, "pct": -13.1, "high": 160.0, "low": 148.0}
+        def news(self, t, d=1):
+            return [{"h": "Nvidia CEO Jensen Huang resigns effective immediately", "src": "Reuters", "at": time.time() - 600},
+                    {"h": "Nvidia shares in focus", "src": "X", "at": time.time() - 600}]
+    os.environ["HOLDINGS"] = "NVDA"
+    rings, stt = [], {"sent": {}}
+    def fonce(k, *a, **kw):
+        if k in stt["sent"]:
+            return False
+        stt["sent"][k] = 1; rings.append((k, kw.get("priority"))); return True
+    nn = dt.datetime(2026, 11, 12, 10, 0)
+    holdings_watch(FakeFH(), stt, nn, fonce, in_session=True)
+    holdings_watch(FakeFH(), stt, nn, fonce, in_session=True)
+    os.environ.pop("HOLDINGS", None)
+    check("holdings: step 12 once, loud", [r for r in rings if r[0].startswith("hstep:NVDA:d:12")] == [("hstep:NVDA:d:12", 5)])
+    pl_own = plan_line({"sym": "NVDA", "pct": -13.1, "last": 151.0, "low": 148.0}, [{"h": "Nvidia CEO resigns"}], True, -0.3, -2.0)
+    pl_wave = plan_line({"sym": "ZZZ", "pct": -12.0, "last": 50.0, "low": 49.0}, [{"h": "Stocks slide as yields jump"}], False, -4.0, -3.0)
+    pl_up = plan_line({"sym": "CRWV", "pct": 24.7, "last": 60.0}, [], True, 1.0, 6.0)
+    check("plan: own news = no entry, exit by size (no near stop)", pl_own.startswith("دخول: لا.") and "خفّف للحد" in pl_own and "بلا وقف قريب" in pl_own)
+    check("plan: wave fall = entry near the close, exit tomorrow", "دخول: قرب السكرة" in pl_wave and "50.00" in pl_wave and "سكرة بكرا" in pl_wave)
+    check("plan: big rise = do not chase", pl_up.startswith("دخول: لا تلحق") and "خفّف للحد" in pl_up)
+    check("holdings: one ring for the story (the step carries the headline)", len(rings) == 1 and not [r for r in rings if r[0].startswith("hnews:")])
+    rings2, st2 = [], {"sent": {}}
+    def fonce2(k, *a, **kw):
+        if k in st2["sent"]:
+            return False
+        st2["sent"][k] = 1; rings2.append((k, kw.get("priority"))); return True
+    os.environ["HOLDINGS"] = "NVDA"
+    holdings_watch(FakeFH(), st2, nn, fonce2, in_session=False)   # before the open: no price, the headline rings alone
+    os.environ.pop("HOLDINGS", None)
+    check("holdings: critical news before the open rings loud", [p for k, p in rings2 if k.startswith("hnews:")] == [5])
+    global intraday, now_ny, nightly, STATE_DIR, extended
     import tempfile
-    keep = (intraday, now_ny, nightly, STATE_DIR)
+    keep = (intraday, now_ny, nightly, STATE_DIR, extended)
     clock, calls, nights = [dt.datetime(2026, 11, 10, 15, 52)], [], []
     def fake_intraday(dry=False):
         calls.append(clock[0])
         if len(calls) == 2:
             raise RuntimeError("boom")
         return 0
+    exts = []
     intraday, now_ny, nightly, STATE_DIR = fake_intraday, (lambda: clock[0]), (lambda dry=False: nights.append(clock[0]) or 0), tempfile.mkdtemp()
+    extended = lambda dry=False: exts.append(clock[0]) or 0
     try:
         rc = session(dry=True, sleep=lambda sec: clock.__setitem__(0, clock[0] + dt.timedelta(seconds=sec)))
         clock[0] = dt.datetime(2026, 11, 14, 11, 0)   # a Saturday
         rc2 = session(dry=True, sleep=lambda sec: None)
     finally:
-        intraday, now_ny, nightly, STATE_DIR = keep
+        intraday, now_ny, nightly, STATE_DIR, extended = keep
     check("chain: session checks", rc == 0 and len(calls) == 3)
     check("chain: nightly once", len(nights) == 1 and nights[0].hour == 18)
+    check("chain: holdings news after the close", len(exts) > 5 and all((x.hour, x.minute) > (16, 5) for x in exts))
     check("chain: hand-over on time", (clock[0].year, rc2) == (2026, 0))
     print("SELFTEST", "PASS" if ok else "FAIL")
     return 0 if ok else 1
