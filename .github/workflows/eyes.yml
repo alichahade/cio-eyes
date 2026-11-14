@@ -1,5 +1,5 @@
 # عيون المكتب (eyes-2.0): watches the market in the session and rings the owner's phone (ntfy) on measured setups.
-# Secrets (Settings > Secrets and variables > Actions): FINNHUB_API_KEY, MASSIVE_API_KEY, NTFY_TOPIC, and WATCHLIST (optional).
+# Secrets (Settings > Secrets and variables > Actions): FINNHUB_API_KEY, MASSIVE_API_KEY, NTFY_TOPIC, WATCHLIST (optional), HOLDINGS (the owner's tickers).
 # PUBLIC repository (free minutes): a chain of jobs stays awake Monday to Friday, checks every 5 minutes in the session, does the
 # nightly work after the close, and each job starts the next one itself. The schedule below only starts the chain when none is awake.
 # PRIVATE repository (2000 minutes a month): single checks whenever GitHub's schedule fires (it often does not).
@@ -63,6 +63,7 @@ jobs:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           WATCHLIST: ${{ secrets.WATCHLIST }}
+          HOLDINGS: ${{ secrets.HOLDINGS }}
           GH_TOKEN: ${{ github.token }}
           EYES_PUBLIC: ${{ steps.pick.outputs.private != 'true' && '1' || '' }}
         run: |
